@@ -164,6 +164,38 @@ app.get('/messages/:friend', authenticate, async (req, res) => {
   return res.json(messages);
 });
 
+// Get unread counts for all friends
+app.get('/messages/unread', authenticate, async (req, res) => {
+  const me = req.user.username;
+
+  try {
+    // Get all friends
+    const friendships = await Friend.find({
+      $or: [{ user1: me }, { user2: me }]
+    });
+
+    const friendNames = friendships.map((f) =>
+      f.user1 === me ? f.user2 : f.user1
+    );
+
+    // Get unread count for each friend
+    const unreadCounts = {};
+    for (const friend of friendNames) {
+      const count = await Message.countDocuments({
+        from: friend,
+        to: me,
+        readAt: null
+      });
+      unreadCounts[friend] = count;
+    }
+
+    return res.json({ unreadCounts: unreadCounts });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 app.post('/messages/:friend/read', authenticate, async (req, res) => {
   const me = req.user.username;
   const friend = req.params.friend;
