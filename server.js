@@ -34,9 +34,17 @@ const MessageSchema = new mongoose.Schema({
   ciphertext: String,
   nonce: String,
   timestamp: { type: Date, default: Date.now },
-  delivered: { type: Boolean, default: false }
+   delivered: { type: Boolean, default: false },
+  readAt: { type: Date, default: null }
 });
 const Message = mongoose.model('Message', MessageSchema);
+const FriendSchema = new mongoose.Schema({
+  user1: { type: String, required: true },
+  user2: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+FriendSchema.index({ user1: 1, user2: 1 }, { unique: true });
+const Friend = mongoose.model('Friend', FriendSchema);
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-please';
 
@@ -94,6 +102,48 @@ function authenticate(req, res, next) {
   }
 }
 
+// --- Add a friend ---
+app.post('/friends/add', authenticate, async (req, res) => {
+  const me = req.user.username;
+  const { friendUsername } = req.body;
+
+  if (!friendUsername || friendUsername === me)
+    return res.status(400).json({ error: 'Invalid username' });
+
+  const friendUser = await User.findOne({ username: friendUsername });
+  if (!friendUser) return res.status(404).json({ error: 'User not found' });
+
+  // store in sorted order so (a,b) === (b,a)
+  const [u1, u2] = [me, friendUsername].sort();
+
+  try {
+    await Friend.create({ user1: u1, user2: u2 });
+  } catch (e) {
+    // already friends — ignore
+  }
+  res.json({ success: true });
+});
+
+// --- List my friends ---
+app.get('/friends', authenticate, async (req, res) => {
+  const me = req.user.username;
+  const friendships = await Friend.find({
+    $or: [{ user1: me }, { user2: me }]
+  });
+  const friendNames = friendships.map(f => f.user1 === me ? f.user2 : f.user1);
+  res.json({ friends: friendNames });
+});
+
+// --- Mark messages from a friend as read ---
+app.post('/messages/:friend/read', authenticate, async (req, res) => {
+  const me = req.user.username;
+  const friend = req.params.friend;
+  await Message.updateMany(
+    { from: friend, to: me, readAt: null },
+    { $set: { readAt: new Date() } }
+  );
+  res.json({ success: true });
+});
 app.get('/messages/:friend', authenticate, async (req, res) => {
   const me = req.user.username;
   const friend = req.params.friend;
@@ -139,6 +189,23 @@ io.on('connection', (socket) => {
     socket.emit('message_sent', { _id: msg._id, timestamp: msg.timestamp });
   });
 
+    socket.on('typing', ({ to, isTyping }) => {
+    const recipientSocket = onlineUsers.get(to);
+    if (recipientSocket) {
+      io.to(recipientSocket).emit('friend_typing', { from: username, isTyping });
+    }
+  });
+
+  socket.on('mark_read', async ({ from }) => {
+    await Message.updateMany(
+      { from, to: username, readAt: null },
+      { $set: { readAt: new Date() } }
+    );
+    const senderSocket = onlineUsers.get(from);
+    if (senderSocket) {
+      io.to(senderSocket).emit('messages_read', { by: username });
+    }
+  });
   socket.on('disconnect', () => {
     onlineUsers.delete(username);
     console.log('🔴 ' + username + ' disconnected');
