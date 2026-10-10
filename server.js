@@ -254,6 +254,82 @@ io.on('connection', (socket) => {
   });
 });
 
+// ============================================================
+// ---- ADMIN ROUTES (SECRET) ----
+// ============================================================
+
+function adminOnly(req, res, next) {
+  const adminUsername = process.env.ADMIN_USERNAME;
+  const adminSecret = req.headers['x-admin-secret'];
+
+  if (!adminUsername) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  if (req.user.username !== adminUsername) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  next();
+}
+
+app.post('/admin/auth', authenticate, async (req, res) => {
+  const adminUsername = process.env.ADMIN_USERNAME;
+  const secret = req.body.secret;
+
+  if (!adminUsername || req.user.username !== adminUsername) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  if (!secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  return res.json({ authorized: true });
+});
+
+app.get('/admin/users', authenticate, adminOnly, async (req, res) => {
+  const users = await User.find({}, { passwordHash: 0 });
+  return res.json(users);
+});
+
+app.get('/admin/messages', authenticate, adminOnly, async (req, res) => {
+  const limit = parseInt(req.query.limit) || 100;
+  const skip = parseInt(req.query.skip) || 0;
+
+  const messages = await Message.find({})
+    .sort({ timestamp: -1 })
+    .limit(limit)
+    .skip(skip);
+
+  const total = await Message.countDocuments();
+  return res.json({ messages: messages, total: total });
+});
+
+app.get('/admin/search', authenticate, adminOnly, async (req, res) => {
+  const q = req.query.q || '';
+  if (!q) return res.json({ messages: [] });
+
+  const messages = await Message.find({
+    text: { $regex: q, $options: 'i' }
+  }).sort({ timestamp: -1 }).limit(100);
+
+  return res.json(messages);
+});
+
+app.delete('/admin/message/:id', authenticate, adminOnly, async (req, res) => {
+  try {
+    await Message.findByIdAndDelete(req.params.id);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log('Server running on port ' + PORT);
